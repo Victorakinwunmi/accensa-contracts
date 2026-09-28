@@ -9,6 +9,9 @@ breaking changes bump the **minor** version, and they are called out as such.
 ## [Unreleased]
 
 ### Added
+- **`staking` (issue #443): implement stACC liquid staking derivative minting.** New `liquid_staking` module (`contracts/governance/src/liquid_staking.rs`) implements stACC minting/burn with 1:1 backing, exchange rate progression, and lock-epoch-based redemption.
+
+### Added
 - **`state-channel` (issue #458): virtual multi-hop HTLCs.** New `htlc` module
   locks slices of a channel's free escrow against a SHA-256 hash lock and
   settles them with a preimage (`add_htlc` / `resolve_htlc` / `refund_htlc`).

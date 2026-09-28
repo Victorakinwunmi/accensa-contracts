@@ -4,7 +4,11 @@ use soroban_sdk {
     contractevent, contracttype, Env, Address, Symbol, Val, Vec,
 };
 
-use soroban_sdk::address::Address;
+#[contract]
+pub struct LiquidStaking;
+
+#[contractimpl]
+impl LiquidStaking {
 
 const LOCK_EPOCH_LEDGERS: u32 = 86400; // 1 day in ledgers (adjustable)
 

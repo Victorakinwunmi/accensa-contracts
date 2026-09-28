@@ -143,7 +143,7 @@ fn stacc_burn_post_lock_expiry() {
 
 extern crate std;
 
-use crate::{Error, Governance, GovernanceClient};
+use crate::{Error, Governance, GovernanceClient, LiquidStaking};
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
     testutils::{Address as _, Ledger},
