@@ -9,10 +9,27 @@ breaking changes bump the **minor** version, and they are called out as such.
 ## [Unreleased]
 
 ### Added
-- **`staking` (issue #443): implement stACC liquid staking derivative minting.** New
-  `liquid_staking` module (`contracts/governance/src/liquid_staking.rs`) implements
-  stACC minting/burn with 1:1 backing, exchange rate progression, and lock-epoch-based
-  redemption.
+
+- **`reputation` (issue #452): on-chain credit scoring for buyers.** New
+  `credit_score` module maintains a dynamic 0–1000 score per buyer: the
+  escrow authority records successful completions (growth of 25% of the
+  remaining headroom per completion, `record_completion` with replay-protected
+  escrow ids) and fraudulent dispute losses (a 50%-of-current-score penalty,
+  `record_fraud`); scores decay 1% of the headroom above a floor of 100 per
+  ~10 days of inactivity and start neutral at 500. `get_score` is read-only,
+  and zero-fee tiers unlock by score (half fee at the gold cut-off, zero at
+  `zero_fee_tier`, both re-tunable by the authority via `set_score_config`).
+- **`reputation` (issue #451): tiered NFT dispute-resolution badges for
+  arbitrators.** New `accensa-reputation` contract tracks each arbitrator's
+  lifetime accurate dispute resolutions — recorded only by the arbiter
+  authority bound at initialization, keyed by caller-supplied dispute ids
+  with replay protection — and mints a non-transferable Bronze badge on the
+  first accepted resolution, upgrading it in place to Silver at 50 and Gold
+  at 100 accurate resolutions (`BadgeMintedEvent` / `BadgeUpgradedEvent`).
+- **Tiered Fee Hook**: Implemented Tiered Fee Assessment Hook in Refund-Vault-Factory Deployments (issue #375).
+- **Batch Transaction Pipeline**: Added Batch Transaction Execution Pipeline to Multisig-Account (issue #385).
+- **Zero-Knowledge Commitments**: Implemented Zero-Knowledge Commitment Verification for State-Channel Off-Chain Settlements (issue #386).
+- **Reentrancy Guard Protocol**: Implemented Cross-Contract Call Reentrancy Guard Protocol (issue #388).
 - **`state-channel` (issue #458): virtual multi-hop HTLCs.** New `htlc` module
   locks slices of a channel's free escrow against a SHA-256 hash lock and
   settles them with a preimage (`add_htlc` / `resolve_htlc` / `refund_htlc`).
@@ -37,6 +54,17 @@ breaking changes bump the **minor** version, and they are called out as such.
   floor, and sends the proceeds to a configured burn address. Admin configures
   it once with `set_buyback_config`; anyone may trigger a swap with
   `execute_buyback` above the configured minimum size.
+- **`common`: standardized read-only telemetry view for frontend dashboards.**
+  New `telemetry` module (`contracts/common/src/telemetry.rs`) defines the
+  canonical `Telemetry` response struct — total/open/closed/disputed/finalized
+  channel counts, active escrow sum, and cumulative fees collected, stamped
+  with the ledger sequence and wall-clock timestamp — plus the
+  `TelemetryProvider` trait and generated `TelemetryClient` so dashboards pull
+  one aggregated snapshot cross-contract. The view is strictly read-only:
+  no writes, no TTL extension, no authorization, and O(1) targeted storage
+  reads (one `instance().get` per field, never record iteration), so the CPU
+  cost is independent of channel/refund volume. Includes unit, read-only
+  property, and completeness tests.
 - **`common` (issue #436): constant-time cryptographic comparison.** New
   `constant_time_eq(a, b)` helper (`contracts/common/src/constant_time.rs`)
   compares byte slices without short-circuiting: every byte and the length
@@ -169,7 +197,7 @@ breaking changes bump the **minor** version, and they are called out as such.
   and `DailyLimitSet`.
 - **`state-channel` (issue #412): cooperative mutual close.** The receiver
   registers an Ed25519 key with `register_receiver_key`. `mutual_close(final_state,
-  sig_a, sig_b)` then checks both signatures over a domain-separated
+sig_a, sig_b)` then checks both signatures over a domain-separated
   `MutualCloseState` (bound to the contract and channel id), requires the
   split to add up to the escrow, pays both parties at once from `Open`,
   `Closed` or `Disputed`, deletes the channel's storage entries and emits
@@ -224,7 +252,7 @@ breaking changes bump the **minor** version, and they are called out as such.
 - **`stream-vault` (issue #410): streaming micro-disbursement schedules.**
   New standalone contract, constructed with `(merchant, token)`.
   `create_stream(buyer, start_ledger, stop_ledger, rate_per_ledger,
-  deposit)` escrows a buyer's deposit and streams it linearly to the
+deposit)` escrows a buyer's deposit and streams it linearly to the
   merchant; the claimable balance is `min(deposit, (ledger - start) * rate)`
   less prior claims. `claim_stream` is permissionless and closes the stream
   once the stop ledger is reached. The buyer can `pause_stream` /
@@ -237,7 +265,7 @@ breaking changes bump the **minor** version, and they are called out as such.
 - **`multisig-account` (issue #425): Ed25519 signature malleability protection.**
   New `crypto` module rejects any signature whose `s` scalar is not strictly
   below the group order `L` (e.g. the malleated twin `(R, s + L)`) with
-  `Error::NonCanonicalSignature` *before* host verification; exposed as the
+  `Error::NonCanonicalSignature` _before_ host verification; exposed as the
   `verify_ed25519` entrypoint. Also restores the crate's build (misplaced
   module docs, invalid `[u8; 32]` contract types, bad zero-address strkey) and
   makes `rotate_signers_and_threshold` require the account's own auth.
@@ -317,6 +345,7 @@ breaking changes bump the **minor** version, and they are called out as such.
   voting window (`contracts/governance/src/quorum.rs`), so inactive proposals
   late in their window need less "yes" weight to pass — but never beneath the
   floor, and "yes" must still outweigh "no".
+
 ### Performance
 
 - **`refund-vault`: nonce-key allocation halved in `check_and_bump_user_nonce`
@@ -351,6 +380,7 @@ breaking changes bump the **minor** version, and they are called out as such.
   `test_events_emitted`, removing the repeated field-set boilerplate.
 
 ### Fixed
+
 - **Build fixes for code merged without compiling.** `governance` declares
   its `voting` and `math` modules and no longer moves `member` before reuse;
   stray `#![no_std]` attributes in submodules (`governance` `ragequit.rs` /
@@ -443,7 +473,7 @@ breaking changes bump the **minor** version, and they are called out as such.
   vault and factory formerly stored their `Option<Address>` policy fields
   verbatim, so a cleared policy left a `Void` in the ledger, which the host
   rejects/breaks on in several read paths (observed as `Error(Context,
-  InvalidAction)` and abort traps in the wasm constructor path). Policy fields
+InvalidAction)` and abort traps in the wasm constructor path). Policy fields
   are now written only when `Some`, and setters `remove()` the key on `None`.
   Absent key ⇔ unconfigured, which is the correct on-chain semantic anyway
   (`Void` is not a legal contract-data value).
@@ -498,7 +528,7 @@ breaking changes bump the **minor** version, and they are called out as such.
   `COMMIT_MIN_DELAY_LEDGERS` (7) ledgers later to surface and consume the
   action. `reveal` re-derives the hash from the plaintext and rejects a
   mismatch (`CommitMismatch`), a reveal before the delay (`CommitDelayNot
-  Elapsed`), a reveal with no pending commit (`NoCommit`), a reveal under a
+Elapsed`), a reveal with no pending commit (`NoCommit`), a reveal under a
   different operation than the one committed (`CommitOperationMismatch`), and
   a duplicate pending commit (`CommitAlreadyExists`). Commitments are
   merchant-only and single-use. New error codes 305–309 are appended without
@@ -507,7 +537,7 @@ breaking changes bump the **minor** version, and they are called out as such.
 
 - **VDF-gated refunds for `RefundVault`** (issue #138): the refund policy now
   carries a Verifiable Delay Function requirement — `propose_policy(ledgers,
-  deadline, vdf_delay)` configures a delay in squarings (subject to the same
+deadline, vdf_delay)` configures a delay in squarings (subject to the same
   timelock) and `execute_policy` applies it. When the policy has a delay
   configured, `refund`, every claim in `claim_batch`, and every item in
   `process_batch` must supply a valid **Wesolowski VDF proof** that the delay
@@ -515,13 +545,13 @@ breaking changes bump the **minor** version, and they are called out as such.
   (302), with an invalid or premature one with `InvalidVdfProof` (303), and a
   proof supplied against a policy with no delay with `VdfNotConfigured` (304).
   The proof is bound to the payment (challenge = `sha256(payment_ref)`), so it
-  cannot be replayed across payments, and the delay is *computational* — a
+  cannot be replayed across payments, and the delay is _computational_ — a
   validator that controls block timestamps or transaction ordering cannot
   shorten it without factoring the contract's fixed 1024-bit modulus. The
   verifier (`contracts/refund-vault/src/vdf.rs`) runs in pure WASM via
   `crypto-bigint` (already in the dependency tree, so no new transitive
   crates), is exposed publicly as read-only `verify_vdf(challenge, delay,
-  proof)` for randomness-verification flows, and its cost is pinned by a
+proof)` for randomness-verification flows, and its cost is pinned by a
   budget test (a verification measures ≈51k CPU units — about a tenth of a
   refund call). The new `get_vdf_delay()` getter exposes the configured delay.
   This is a **breaking change** for clients: the `propose_policy` signature is
@@ -538,7 +568,6 @@ breaking changes bump the **minor** version, and they are called out as such.
   and saving computational overhead on-chain. Added `verify_zk_proof` to verify
   Groth16 proofs against verifying keys and public inputs, and introduced
   `Error::InvalidProof` (code 203).
-
 
 - **Best-effort batch refunds for `RefundVault`**: `process_batch(refunds)`
   processes up to 100 claims in one transaction (`Vec<RefundParam>`, same shape
@@ -628,7 +657,6 @@ breaking changes bump the **minor** version, and they are called out as such.
   activates `soroban-sdk`'s `testutils` feature, which is not supported on the
   `wasm32v1-none` target and made every wasm build fail at the SDK boundary.
 
-
   The `.wasm-budget.json` size budgets are updated to the current deterministic
   release builds (receipt-anchor 33,067 B, refund-vault 85,453 B) with ~5%
   headroom — the exact-pin approach kept breaking on toolchain drift, and the
@@ -646,7 +674,6 @@ breaking changes bump the **minor** version, and they are called out as such.
   SHA-256 loop, avoiding redundant proof buffering and host crypto roundtrips.
   Batch-size instruction measurements were added to the ReceiptAnchor test suite
   and documented in `docs/BENCHMARKS.md`.
-
 
 - **Advanced WASM Memory Management for Merkle Proofs** (issue #139):
   Refactored `ReceiptShard::verify_receipt` to copy host vector inputs into a stack-allocated
@@ -848,10 +875,10 @@ Both:
 **The testnet deployment has deliberately not been updated to `0.2.0`.** The
 contracts live at:
 
-| Contract | Contract ID | Version deployed |
-|---|---|---|
-| `ReceiptAnchor` | `CBHRJU7CF4XIFRNDITFHNQHABKBMFM2FYFHLGWN3JGSFYYCDSMDAWPRV` | `0.1.0` |
-| `RefundVault` | `CCMBM44EJUGD52G4LSMGHSXMAH2KSAQZX7VOYY4TTBF5BK4D7M4IHRQA` | `0.1.0` |
+| Contract        | Contract ID                                                | Version deployed |
+| --------------- | ---------------------------------------------------------- | ---------------- |
+| `ReceiptAnchor` | `CBHRJU7CF4XIFRNDITFHNQHABKBMFM2FYFHLGWN3JGSFYYCDSMDAWPRV` | `0.1.0`          |
+| `RefundVault`   | `CCMBM44EJUGD52G4LSMGHSXMAH2KSAQZX7VOYY4TTBF5BK4D7M4IHRQA` | `0.1.0`          |
 
 Soroban deployment mints a new contract ID. Redeploying would invalidate every
 published address — including the ones the public receipt verifier at
@@ -877,4 +904,3 @@ the transactions that created them are recorded in
 [0.3.0]: https://github.com/accensa/accensa-contracts/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/accensa/accensa-contracts/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/accensa/accensa-contracts/releases/tag/v0.1.0
-
