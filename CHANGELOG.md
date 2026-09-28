@@ -9,9 +9,10 @@ breaking changes bump the **minor** version, and they are called out as such.
 ## [Unreleased]
 
 ### Added
-- **`staking` (issue #443): implement stACC liquid staking derivative minting.** New `liquid_staking` module (`contracts/governance/src/liquid_staking.rs`) implements stACC minting/burn with 1:1 backing, exchange rate progression, and lock-epoch-based redemption.
-
-### Added
+- **`staking` (issue #443): implement stACC liquid staking derivative minting.** New
+  `liquid_staking` module (`contracts/governance/src/liquid_staking.rs`) implements
+  stACC minting/burn with 1:1 backing, exchange rate progression, and lock-epoch-based
+  redemption.
 - **`state-channel` (issue #458): virtual multi-hop HTLCs.** New `htlc` module
   locks slices of a channel's free escrow against a SHA-256 hash lock and
   settles them with a preimage (`add_htlc` / `resolve_htlc` / `refund_htlc`).
@@ -876,8 +877,4 @@ the transactions that created them are recorded in
 [0.3.0]: https://github.com/accensa/accensa-contracts/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/accensa/accensa-contracts/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/accensa/accensa-contracts/releases/tag/v0.1.0
-
-
-## [Unreleased]
-- Fixed issues
 
