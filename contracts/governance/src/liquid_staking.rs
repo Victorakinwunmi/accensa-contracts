@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk {
+use soroban_sdk::{
     contractevent, contracttype, Env, Address, Symbol, Val, Vec,
 };
 
