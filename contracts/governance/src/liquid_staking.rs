@@ -336,3 +336,4 @@ pub fn set_exchange_rate(env: Env, new_rate: u64) -> Result<(), LiquidStakingErr
         .set(&LiquidStakingDataKey::ExchangeRate, &ExchangeRate(new_rate));
     Ok(())
 }
+}
