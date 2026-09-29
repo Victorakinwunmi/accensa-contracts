@@ -1,5 +1,6 @@
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, Address, Env,
+    contract, contracterror, contractevent, contractimpl, contracttype, Address,
+    Env,
 };
 
 const LOCK_EPOCH_LEDGERS: u32 = 86400; // 1 day in ledgers (adjustable)
@@ -18,6 +19,8 @@ pub enum LiquidStakingError {
     InsufficientBalance = 4,
     /// The exchange rate operation would overflow.
     MathOverflow = 5,
+    /// `initialize` has not been called, so no exchange rate is stored.
+    NotInitialized = 6,
 }
 
 // --- Event types (contractevent is fine, no name conflict) ---
@@ -77,6 +80,17 @@ pub enum LiquidStakingDataKey {
 
 #[contract]
 pub struct LiquidStaking;
+
+/// Load the exchange rate written by [`LiquidStaking::initialize`].
+///
+/// A missing storage key is an explicit [`LiquidStakingError::NotInitialized`]
+/// instead of a silent 1:1 fallback, so callers cannot bypass `initialize`.
+fn load_exchange_rate(env: &Env) -> Result<ExchangeRate, LiquidStakingError> {
+    env.storage()
+        .instance()
+        .get(&LiquidStakingDataKey::ExchangeRate)
+        .ok_or(LiquidStakingError::NotInitialized)
+}
 
 #[contractimpl]
 impl LiquidStaking {
@@ -226,12 +240,8 @@ impl LiquidStaking {
             return Err(LiquidStakingError::LockNotExpired);
         }
 
-        // Get current exchange rate
-        let exchange_rate: ExchangeRate = env
-            .storage()
-            .instance()
-            .get(&LiquidStakingDataKey::ExchangeRate)
-            .unwrap_or(ExchangeRate { rate: 1_000_000 });
+        // Get current exchange rate (requires `initialize`)
+        let exchange_rate: ExchangeRate = load_exchange_rate(&env)?;
 
         // Calculate underlying tokens: stACC * exchange_rate / 1e6
         // Using u128 intermediate to avoid overflow
@@ -301,13 +311,11 @@ impl LiquidStaking {
     }
 
     /// Read-only: fetch the current exchange rate (1e6 precision).
-    pub fn get_exchange_rate(env: Env) -> u64 {
-        let er: ExchangeRate = env
-            .storage()
-            .instance()
-            .get(&LiquidStakingDataKey::ExchangeRate)
-            .unwrap_or(ExchangeRate { rate: 1_000_000 });
-        er.rate
+    ///
+    /// Returns [`LiquidStakingError::NotInitialized`] if `initialize` has not
+    /// been called yet, rather than a silent default rate.
+    pub fn get_exchange_rate(env: Env) -> Result<u64, LiquidStakingError> {
+        Ok(load_exchange_rate(&env)?.rate)
     }
 
     /// Read-only: fetch total underlying tokens locked.
@@ -349,12 +357,7 @@ impl LiquidStaking {
         if new_rate == 0 {
             return Err(LiquidStakingError::ZeroAmount);
         }
-        let current: u64 = env
-            .storage()
-            .instance()
-            .get(&LiquidStakingDataKey::ExchangeRate)
-            .unwrap_or(ExchangeRate { rate: 1_000_000 })
-            .rate;
+        let current: u64 = load_exchange_rate(&env)?.rate;
         if new_rate < current {
             return Err(LiquidStakingError::MathOverflow); // rate cannot go backwards
         }
