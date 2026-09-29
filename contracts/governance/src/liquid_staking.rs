@@ -275,10 +275,10 @@ impl LiquidStaking {
         total_supply = total_supply
             .checked_sub(stacc_amount)
             .ok_or(LiquidStakingError::MathOverflow)?;
-        // Only reduce locked if this user had locked underlying; the burn
+        // Only reduce locked by the underlying actually redeemed; the burn
         // redeems from the locked amount.
         total_locked = total_locked
-            .checked_sub(stacc_amount)
+            .checked_sub(underlying_redeemed)
             .ok_or(LiquidStakingError::MathOverflow)?;
 
         env.storage()

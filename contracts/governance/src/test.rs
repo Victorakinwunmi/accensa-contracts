@@ -114,13 +114,9 @@ fn stacc_burn_post_lock_expiry() {
     assert_eq!(stacc.get_total_supply(), 0);
     assert_eq!(stacc.get_total_locked(), 0);
 }
-// expects its admin to (see `tests/receipt_anchor_admin.rs` for the same
-// proof against the real contract).
 //
 // ## Liquid Staking Derivative (stACC) Tests
 // Tests for stACC minting, exchange rate progression, and burn redemption.
-// expects its admin to (see `tests/receipt_anchor_admin.rs` for the same
-// proof against the real contract).
 
 extern crate std;
 
