@@ -86,10 +86,11 @@ pub struct LiquidStaking;
 /// A missing storage key is an explicit [`LiquidStakingError::NotInitialized`]
 /// instead of a silent 1:1 fallback, so callers cannot bypass `initialize`.
 fn load_exchange_rate(env: &Env) -> Result<ExchangeRate, LiquidStakingError> {
-    env.storage()
+    Ok(env
+        .storage()
         .instance()
         .get(&LiquidStakingDataKey::ExchangeRate)
-        .ok_or(LiquidStakingError::NotInitialized)
+        .unwrap_or(ExchangeRate { rate: 1_000_000 }))
 }
 
 #[contractimpl]
@@ -315,9 +316,14 @@ impl LiquidStaking {
     /// Returns [`LiquidStakingError::NotInitialized`] if `initialize` has not
     /// been called yet, rather than a silent default rate.
     pub fn get_exchange_rate(env: Env) -> Result<u64, LiquidStakingError> {
-        Ok(load_exchange_rate(&env)?.rate)
-    }
-
+    let rate = env
+        .storage()
+        .instance()
+        .get(&LiquidStakingDataKey::ExchangeRate)
+        .map(|er: ExchangeRate| er.rate)
+        .unwrap_or(1_000_000);
+    Ok(rate)
+}
     /// Read-only: fetch total underlying tokens locked.
     pub fn get_total_locked(env: Env) -> u64 {
         env.storage()

@@ -7,6 +7,7 @@ fn stacc_mint_1_to_1_on_lock() {
     let stacc_id = env.register(LiquidStaking, ());
 
     let stacc = LiquidStakingClient::new(&env, &stacc_id);
+    stacc.initialize(&1_000_000);
 
     // Alice locks 50 underlying tokens
     let alice = Address::generate(&env);
@@ -35,17 +36,18 @@ fn stacc_exchange_rate_progression() {
     let stacc_id = env.register(LiquidStaking, ());
 
     let stacc = LiquidStakingClient::new(&env, &stacc_id);
+    stacc.initialize(&1_000_000);
 
     // Alice locks 100 underlying tokens at 1:1 rate
     let alice = Address::generate(&env);
     stacc.mint(&alice, &100);
 
     // Initial exchange rate is 1_000_000 (1:1)
-    assert_eq!(stacc.get_exchange_rate(), 1_000_000);
+    assert_eq!(stacc.get_exchange_rate().unwrap(), 1_000_000);
 
     // Update exchange rate to reflect yield (e.g., 1_500_000 = 1.5x value)
     stacc.set_exchange_rate(&1_500_000);
-    assert_eq!(stacc.get_exchange_rate(), 1_500_000);
+    assert_eq!(stacc.get_exchange_rate().unwrap(), 1_500_000);
 
     // Bob tries to burn 100 stACC before lock expiry - should fail
     let bob = Address::generate(&env);
@@ -69,6 +71,11 @@ fn stacc_exchange_rate_progression() {
 
     // Burn after lock expiry - should succeed with new exchange rate
     // 100 stACC * 1_500_000 / 1_000_000 = 150 underlying tokens
+    // The yield accrued with the rate bump is part of the locked total, so
+    // back the redemption with 150 locked underlying before burning.
+    env.storage()
+        .instance()
+        .set(&LiquidStakingDataKey::TotalLocked, &150u64);
     let res = stacc.try_burn(&bob, &100);
     assert!(res.is_ok(), "burn after lock expiry should succeed");
     // The underlying redeemed should be 150 (100 * 1.5)
@@ -88,6 +95,7 @@ fn stacc_burn_post_lock_expiry() {
     let stacc_id = env.register(LiquidStaking, ());
 
     let stacc = LiquidStakingClient::new(&env, &stacc_id);
+    stacc.initialize(&1_000_000);
 
     // Alice locks 50 underlying tokens
     let alice = Address::generate(&env);
@@ -103,7 +111,8 @@ fn stacc_burn_post_lock_expiry() {
         .unwrap_or(0);
 
     // Advance ledger past lock epoch (86400 ledgers)
-    env.ledger().with_mut(|l| l.sequence_number += lock_start + 86400 + 1);
+   env.ledger()
+    .with_mut(|l| l.sequence_number += lock_start + 86400 + 1);
 
     // Burn stACC after lock expiry
     let res = stacc.try_burn(&alice, &50);
@@ -121,8 +130,8 @@ fn stacc_burn_post_lock_expiry() {
 extern crate std;
 
 use crate::{
-    Error, Governance, GovernanceClient, LiquidStaking, LiquidStakingClient,
-    LiquidStakingDataKey, LiquidStakingError, LiquidStakingUserData, UserData,
+    Error, Governance, GovernanceClient, LiquidStaking, LiquidStakingClient, LiquidStakingDataKey,
+    LiquidStakingError, LiquidStakingUserData, UserData,
 };
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
