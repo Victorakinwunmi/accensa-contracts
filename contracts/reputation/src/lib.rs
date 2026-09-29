@@ -1,7 +1,10 @@
 //! On-chain reputation for Accensa.
 //!
-//! Two independent features share this contract:
+//! Three independent features share this contract:
 //!
+//! - **Merchant soulbound tokens** (issue #450): non-transferable KYC /
+//!   volume-tier credentials minted and governed by the bound authority —
+//!   see [`sbt`]. `transfer` and `approve` exist only to revert.
 //! - **Arbitrator badges** (issue #451): tiered NFT badges minted and
 //!   upgraded from a lifetime record of accurate dispute resolutions — see
 //!   [`badges`].
@@ -11,19 +14,18 @@
 //!
 //! # Access model
 //!
-//! - `initialize` binds a single authority address (the dispute-resolution
-//!   or escrow/settlement contract, or a governance multisig). Only that
-//!   address may record resolutions or score events — delegated
-//!   record-keeping, never claimed.
+//! - `initialize` binds a single authority address (governance multisig, the
+//!   dispute-resolution contract, or the escrow/settlement contract). Only
+//!   that address may record resolutions, score events, or issue, revoke
+//!   and slash credentials — delegated record-keeping, never claimed.
 //! - Everything else is read-only, so indexers, bazaar listings and fee
-//!   calculators can gate on badge tier or credit score without paying for
-//!   auth.
+//!   calculators can gate on credential class, badge tier or credit score
+//!   without paying for auth.
 //!
 //! # MVP cuts
 //!
-//! Deliberately out of scope: transfer/approval paths (badges are
-//! non-transferable by construction), per-dispute inaccuracy tracking, badge
-//! revocation/slashing, metadata URIs, and self-reported credit history.
+//! Deliberately out of scope: token metadata URIs, per-dispute inaccuracy
+//! tracking, credential expiry, and self-reported credit history.
 
 #![no_std]
 
@@ -33,9 +35,14 @@ mod badges_test;
 mod credit_score;
 #[cfg(test)]
 mod credit_score_test;
+mod sbt;
+#[cfg(test)]
+mod sbt_test;
 
 use badges::{Badge, BadgeTier, Error};
-use soroban_sdk::{contract, contracterror, contractimpl, contractmeta, Address, Env};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contractmeta, Address, Env, String as SdkString,
+};
 
 pub use badges::{
     BadgeMintedEvent, BadgeUpgradedEvent, DataKey as BadgeDataKey, ResolutionRecordedEvent,
@@ -45,6 +52,9 @@ pub use credit_score::{
     apply_decay, fee_bps_for, CreditDataKey, CreditRecord, CreditUpdatedEvent, ScoreChangeReason,
     ScoreConfig, DECAY_INTERVAL_LEDGERS, DECAY_RATE_BPS, DEFAULT_GOLD_TIER, DEFAULT_ZERO_FEE_TIER,
     GROWTH_RATE_BPS, MAX_SCORE, PENALTY_RATE_BPS, SCORE_FLOOR, STARTING_SCORE,
+};
+pub use sbt::{
+    CredentialClass, SbtDataKey, SbtIssuedEvent, SbtRevokedEvent, SbtSlashedEvent, SoulboundToken,
 };
 
 /// Reads the bound authority address, failing with
@@ -81,6 +91,32 @@ pub enum CreditError {
     EscrowAlreadyRecorded = 8,
 }
 
+/// Error variants for merchant soulbound tokens (issue #450). The badge
+/// variants live in [`badges::Error`] and the credit variants in
+/// [`CreditError`]; keeping the additions separate keeps each feature's
+/// discriminants stable.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum SbtError {
+    /// A state-changing call was made before `initialize`.
+    NotInitialized = 2,
+    /// The merchant already holds a soulbound credential.
+    AlreadyIssued = 7,
+    /// No soulbound credential exists for this address.
+    SbtNotFound = 8,
+    /// The credential class is not a valid [`CredentialClass`] value.
+    InvalidClass = 9,
+    /// The credential is already slashed.
+    AlreadySlashed = 10,
+    /// A soulbound credential was revoked; it can never be re-issued.
+    Revoked = 11,
+    /// Soulbound credentials cannot move: `transfer` always reverts.
+    SbtNonTransferable = 12,
+    /// Soulbound credentials cannot be delegated: `approve` always reverts.
+    SbtApprovalDisabled = 13,
+}
+
 #[contract]
 pub struct Reputation;
 
@@ -100,6 +136,7 @@ impl Reputation {
         env.storage()
             .instance()
             .set(&BadgeDataKey::BadgeCount, &0u64);
+        env.storage().instance().set(&SbtDataKey::SbtCount, &0u64);
         Ok(())
     }
 
@@ -402,4 +439,163 @@ impl Reputation {
         let score = Self::get_score(env.clone(), buyer);
         credit_score::fee_bps_for(score, base_fee_bps, &credit_score::get_config_impl(&env))
     }
+
+    // ── Merchant soulbound tokens (issue #450) ──────────────────────────
+
+    /// Mint a non-transferable soulbound credential of `class` to
+    /// `merchant`. Governance (the bound authority) only.
+    ///
+    /// Returns the new token id. A revoked address can never be re-issued.
+    ///
+    /// # Errors
+    /// - `NotInitialized`: before `initialize`.
+    /// - `InvalidClass`: `class` is not a valid [`CredentialClass`].
+    /// - `Revoked`: the merchant's credential was revoked — permanent.
+    /// - `AlreadyIssued`: the merchant already holds a credential,
+    ///   including a slashed one, which stays bound as a public record.
+    pub fn issue(env: Env, merchant: Address, class: u32) -> Result<u64, SbtError> {
+        sbt_authority(&env)?.require_auth();
+
+        let class = CredentialClass::from_repr(class).ok_or(SbtError::InvalidClass)?;
+        if env
+            .storage()
+            .persistent()
+            .has(&SbtDataKey::Revoked(merchant.clone()))
+        {
+            return Err(SbtError::Revoked);
+        }
+        if sbt::get_sbt_impl(&env, &merchant).is_some() {
+            return Err(SbtError::AlreadyIssued);
+        }
+
+        let token_id: u64 = env
+            .storage()
+            .instance()
+            .get(&SbtDataKey::SbtCount)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&SbtDataKey::SbtCount, &(token_id + 1));
+
+        let credential = SoulboundToken {
+            token_id,
+            class,
+            issued_at: env.ledger().sequence(),
+            slashed: false,
+            slashed_at: None,
+            reason: None,
+        };
+        sbt::store(&env, &merchant, &credential);
+
+        SbtIssuedEvent {
+            token_id,
+            owner: merchant.clone(),
+            class,
+        }
+        .publish(&env);
+        Ok(token_id)
+    }
+
+    /// Burn the credential held by `merchant` (governance only) and write a
+    /// permanent tombstone that blocks re-issue. Returns the burned token
+    /// id.
+    ///
+    /// # Errors
+    /// - `NotInitialized`: before `initialize`.
+    /// - `SbtNotFound`: the merchant holds no credential.
+    pub fn revoke(env: Env, merchant: Address) -> Result<u64, SbtError> {
+        sbt_authority(&env)?.require_auth();
+
+        if sbt::get_sbt_impl(&env, &merchant).is_none() {
+            return Err(SbtError::SbtNotFound);
+        }
+        let credential = sbt::burn(&env, &merchant);
+
+        SbtRevokedEvent {
+            token_id: credential.token_id,
+            owner: merchant.clone(),
+        }
+        .publish(&env);
+        Ok(credential.token_id)
+    }
+
+    /// Flag the credential held by `merchant` as slashed (governance only).
+    /// The credential stays bound to its holder as a public death record:
+    /// it cannot be transferred, and it cannot be re-issued while present.
+    /// Returns the token id.
+    ///
+    /// # Errors
+    /// - `NotInitialized`: before `initialize`.
+    /// - `SbtNotFound`: the merchant holds no credential.
+    /// - `AlreadySlashed`: the credential is already slashed.
+    pub fn slash(env: Env, merchant: Address, reason: SdkString) -> Result<u64, SbtError> {
+        sbt_authority(&env)?.require_auth();
+
+        let mut credential = sbt::get_sbt_impl(&env, &merchant).ok_or(SbtError::SbtNotFound)?;
+        if credential.slashed {
+            return Err(SbtError::AlreadySlashed);
+        }
+        credential.slashed = true;
+        credential.slashed_at = Some(env.ledger().sequence());
+        credential.reason = Some(reason.clone());
+        sbt::store(&env, &merchant, &credential);
+
+        SbtSlashedEvent {
+            token_id: credential.token_id,
+            owner: merchant.clone(),
+            slashed_at: env.ledger().sequence(),
+            reason,
+        }
+        .publish(&env);
+        Ok(credential.token_id)
+    }
+
+    /// Soulbound credentials cannot move. Exists only so callers trying the
+    /// standard token interface get a typed revert instead of a
+    /// missing-function trap; no authorization is required because the call
+    /// can never do anything.
+    ///
+    /// # Errors
+    /// - Always: `SbtNonTransferable`.
+    pub fn transfer(
+        _env: Env,
+        _from: Address,
+        _to: Address,
+        _token_id: u64,
+    ) -> Result<(), SbtError> {
+        Err(SbtError::SbtNonTransferable)
+    }
+
+    /// Soulbound credentials cannot be delegated. Exists only so callers
+    /// trying the standard token interface get a typed revert instead of a
+    /// missing-function trap.
+    ///
+    /// # Errors
+    /// - Always: `SbtApprovalDisabled`.
+    pub fn approve(_env: Env, _spender: Address, _token_id: u64) -> Result<(), SbtError> {
+        Err(SbtError::SbtApprovalDisabled)
+    }
+
+    /// Returns the soulbound credential held by `merchant`, if any.
+    /// Read-only.
+    pub fn get_sbt(env: Env, merchant: Address) -> Option<SoulboundToken> {
+        sbt::get_sbt_impl(&env, &merchant)
+    }
+
+    /// Returns the number of credentials ever issued. Read-only.
+    pub fn total_sbt(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&SbtDataKey::SbtCount)
+            .unwrap_or(0)
+    }
+}
+
+/// Reads the bound governance authority, failing with
+/// [`SbtError::NotInitialized`] if absent.
+fn sbt_authority(env: &Env) -> Result<Address, SbtError> {
+    env.storage()
+        .instance()
+        .get(&BadgeDataKey::Admin)
+        .ok_or(SbtError::NotInitialized)
 }

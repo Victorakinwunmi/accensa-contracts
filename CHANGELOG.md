@@ -9,7 +9,15 @@ breaking changes bump the **minor** version, and they are called out as such.
 ## [Unreleased]
 
 ### Added
-
+- **`reputation` (issue #450): soulbound tokens for verified merchants.** New
+  `sbt` module mints non-transferable KYC / volume-tier credentials
+  (`Verified` / `Trusted` / `Premium`) bound to one address each, issued and
+  governed by the contract authority (`issue` / `revoke` / `slash`).
+  `transfer` and `approve` exist only to revert with typed errors
+  (`SbtNonTransferable` / `SbtApprovalDisabled`), so a credential can never
+  be bought, borrowed or farmed; a revoke burns the credential and writes a
+  permanent tombstone that blocks re-issue, while a slash flags it in place
+  as a public record.
 - **`reputation` (issue #452): on-chain credit scoring for buyers.** New
   `credit_score` module maintains a dynamic 0–1000 score per buyer: the
   escrow authority records successful completions (growth of 25% of the
