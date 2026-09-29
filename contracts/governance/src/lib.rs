@@ -68,8 +68,8 @@ mod voting;
 mod liquid_staking;
 
 pub use liquid_staking::{
-    LiquidStaking, LiquidStakingError, LiquidStakingDataKey, ExchangeRate, UserData,
-    Mint, Burn,
+    Burn, ExchangeRate, LiquidStaking, LiquidStakingClient, LiquidStakingDataKey,
+    LiquidStakingError, Mint, UserData, UserData as LiquidStakingUserData,
 };
 
 use quorum::current_quorum_bps;
