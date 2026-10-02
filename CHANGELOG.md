@@ -9,6 +9,48 @@ breaking changes bump the **minor** version, and they are called out as such.
 ## [Unreleased]
 
 ### Added
+- **`receipt-shard` (issue #437): shard storage consolidation.** Router-authorized source shards can migrate exact `BatchRecord` values into a destination shard, verify the returned record before deletion, emit `ShardsConsolidated`, and mark drained sources inactive to stop further writes.
+- **`oracle`: Chainlink data-feed consumer trait.** New `accensa-oracle` contract (`contracts/oracle/src/chainlink.rs`) implements an AggregatorV3-style consumer: admin-pushed `RoundData` with round-completeness checks (`answered_in_round`, `updated_at`, positive answer), staleness rejection, monotonic round ids, and the standard `get_price` + `get_last_update_ledger` oracle interface for `RefundVault` fee scaling.
+- **`cross-chain` (issue #455): LayerZero omnichain dispute bridging.** New
+  `layerzero` module lets decentralized arbitrators on remote chains deliver
+  dispute resolutions to Soroban through a LayerZero endpoint. The admin
+  registers the endpoint (`set_layerzero_endpoint`) and trusted peer
+  contracts per source chain (`set_trusted_peer`); the endpoint delivers
+  packets with `lz_receive(src_eid, sender, nonce, payload)`, which validates
+  the sender against the trusted-peer registry, enforces strictly-advancing
+  per-channel packet nonces (replays rejected with `StaleState`),
+  bounds-checks the versioned dispute payload (`parse_dispute_payload`),
+  refuses a dispute id that already settled (`AlreadyRefunded`), and emits
+  `DisputeResolvedEvent`. A mock-endpoint integration suite proves the real
+  auth path: only the registered endpoint calling in can pass
+  `require_auth`.
+- **`state-channel` (issue #488): Lightning-style pre-image reveal
+  mechanics.** New `hashlock` module locks a slice of a channel's free
+  escrow against `sha256(preimage)` (`add_hashlock_payment`) and settles it
+  when the preimage is revealed on-chain (`reveal_preimage`, permissionless,
+  `InvalidPreimage` on mismatch, `HtlcNotPending` on double reveal),
+  crediting the receiver's balance and emitting
+  `HashlockPaymentRevealedEvent` carrying the hashlock — never the secret.
+  `close_channel_with_preimage` ties the reveal into the close flow: the
+  sender's signed final state plus the receiver's preimage settle the
+  invoice atomically, with the receiver's payout becoming
+  `balance + amount` before the challenge window starts. Hashlock
+  reservations share the escrow ceiling with HTLC reservations
+  (`get_reserved_escrow`), so no combination of states, hops and invoices
+  can overdraw escrow.
+- **`governance` (issue #483): proposal simulation hooks.** Proposals can
+  carry a `SimulationReport` from a registered simulator contract
+  (`ProposalSimulator::simulate` dry-runs the exact calldata off-chain, the
+  on-chain side cannot): `propose_with_simulation` verifies the report's
+  simulator is the registered one (its `require_auth` co-signs the
+  creation), that `sim_hash` re-derives to the canonical
+  `sim_payload` binding this proposal id and this exact calldata, and that
+  the outcome is `SIM_OK` — a proposal the dry-run says would revert is
+  rejected at creation (`SimulationFailed`) and never reaches a vote.
+  `set_simulation_config` turns mandatory simulation on/off per body; when
+  mandatory, the plain `propose` path fails with `SimulationRequired`.
+  Reports are stored under their own key (`get_simulation_report`) so the
+  `Proposal` record shape is unchanged.
 - **`reputation` (issue #450): soulbound tokens for verified merchants.** New
   `sbt` module mints non-transferable KYC / volume-tier credentials
   (`Verified` / `Trusted` / `Premium`) bound to one address each, issued and
@@ -232,6 +274,39 @@ sig_a, sig_b)` then checks both signatures over a domain-separated
   protocol treasury or a merchant rebate pool (default: the merchant).
   **Behaviour change:** a refund larger than the liquid float but covered by
   deployed principal now succeeds instead of failing with `InsufficientFloat`.
+- **`refund-vault-factory` (issue #472): deterministic CREATE2-style vault
+  deployments.** New `deploy_for_participants(init, buyer)` derives the
+  deployment salt as `sha256(buyer ‖ merchant)` (a pure function of the escrow
+  participants) and deploys the vault through the existing
+  counter-independent `create_vault(salt)` path, reusing its `SaltCollision`
+  guard. `predict_address(buyer, merchant)` exposes
+  `with_current_contract(salt).deployed_address()`, so two parties can agree
+  on — and even pre-fund — an escrow address off-chain before the factory
+  deploys it.
+- **`refund-vault` (issue #474): NFT escrow.** New `deposit_nft`,
+  `claim_nft`, `refund_nft` and `get_nft_escrow` let a vault escrow Soroban
+  non-fungible tokens alongside the fungible float. NFTs go through the
+  standard non-fungible surface (`owner(token_id)`, `transfer(from, to,
+  token_id)`) rather than SEP-41, are keyed by exact `(contract, token_id)`,
+  and `claim_nft`/`refund_nft` return the very token id released. Reentrancy
+  and pause guards are shared with the fungible path; new errors
+  `NftAlreadyEscrowed`, `NftNotOwned`, `NftEscrowNotFound`.
+- **`refund-policy-vdf` (issue #469): dispute fallback oracle.** When the
+  primary arbitrators time out, `request_fallback_dispute` escalates a
+  dispute to an external optimistic-oracle-style fallback oracle;
+  `build_fallback_oracle_request` hands the dispute to it as an XDR payload;
+  and `settle_fallback_dispute` (oracle-authorized only) records the ruling.
+  Disputes live in a bounded persistent ledger inside the otherwise-stateless
+  policy contract, readable via `get_fallback_dispute`. New errors
+  `DisputeNotFound`, `DisputeClosed`.
+- **`governance` (issue #475): optimistic execution queue.** `optimistic_submit`
+  queues a routine call executable immediately by anyone; members can veto it
+  during a 24-hour window with `veto_optimistic`, and cumulative quadratic
+  veto weight reaching a ~2/3 supermajority of total weight locks it so
+  `execute_optimistic` reverts with `OptimisticVetoed`. Vetoes close after
+  the window (`ChallengeWindowClosed`), a proposal executes exactly once
+  (`AlreadyExecuted`), and a member vetoes once (`AlreadyVetoed`).
+  `get_optimistic_proposal` exposes the queue state.
 - **`state-channel` (issue #423): multi-asset collateral pooling.** New
   `open_multi_asset_channel` escrows several tokens in one channel, tracked
   per token as a `BalanceRecord`. Signed `MultiAssetState`s must name exactly
@@ -388,7 +463,32 @@ deposit)` escrows a buyer's deposit and streams it linearly to the
   `test_events_emitted`, removing the repeated field-set boilerplate.
 
 ### Fixed
-
+- **`treasury`: the yield distribution module is now part of the build (issue
+  #523).** #523 landed `distribution.rs` and `distribution_test.rs` without the
+  `pub mod distribution;` / `#[cfg(test)] mod distribution_test;` declarations
+  and without the seven `Error` variants the module returns, so `treasury` did
+  not compile and `fmt`, `test`, `budget-limits` and `build-wasm` were all red
+  on `main`. Added the module declarations plus `DistributionNotInitialized`
+  through `NoYieldToClaim` as variants `= 30..=36`, appended after the existing
+  set so every current error code keeps its value.
+- **`treasury`: staking moves the treasury's own asset, and changing a stake no
+  longer forfeits accrued yield.** `DistributionConfig` holds the *yield* token
+  (the one `initialize_distribution` registers), but `stake` and `unstake`
+  transferred that token as if it were the staked asset, so every stake tried to
+  pull yield tokens from users who hold none. They now transfer
+  `DataKey::Token`, and the yield token stays the payout asset for
+  `claim_yield`. Separately, `stake` and `unstake` re-anchored the user's
+  checkpoint to the current accumulator without settling what had accrued at the
+  previous stake size, which silently discarded pending yield on every position
+  change. Accrued yield is now settled into a `UserDistribution::pending` bucket
+  before the stake changes, and `pending_yield` / `claim_yield` report and pay
+  that bucket plus the current accrual.
+- **`refund-vault`: test modules are no longer compiled into the release
+  build.** `token_agnostic_tests` and `yield_tests` were the only two test
+  modules declared without `#[cfg(test)]`, so roughly 1.3k lines of test code
+  entered the non-test build path. They are dead-code eliminated at present,
+  which is why the deployed WASM is unchanged, but the mismatch meant a test
+  helper with any side effect would have shipped silently.
 - **Build fixes for code merged without compiling.** `governance` declares
   its `voting` and `math` modules and no longer moves `member` before reuse;
   stray `#![no_std]` attributes in submodules (`governance` `ragequit.rs` /
@@ -912,3 +1012,7 @@ the transactions that created them are recorded in
 [0.3.0]: https://github.com/accensa/accensa-contracts/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/accensa/accensa-contracts/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/accensa/accensa-contracts/releases/tag/v0.1.0
+
+
+## [Unreleased]
+- Fixed issues

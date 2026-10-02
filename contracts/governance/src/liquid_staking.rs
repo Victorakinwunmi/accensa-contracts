@@ -1,6 +1,5 @@
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address,
-    Env,
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, Env,
 };
 
 const LOCK_EPOCH_LEDGERS: u32 = 86400; // 1 day in ledgers (adjustable)
@@ -101,22 +100,17 @@ impl LiquidStaking {
     /// The exchange rate starts at 1_000_000 (1:1 stACC-to-underlying at
     /// origination). It may be updated by governance to reflect
     /// accumulated yield. Returns an Error if the initial rate is zero.
-    pub fn initialize(
-        env: Env,
-        initial_exchange_rate: u64,
-    ) -> Result<(), LiquidStakingError> {
+    pub fn initialize(env: Env, initial_exchange_rate: u64) -> Result<(), LiquidStakingError> {
         if initial_exchange_rate == 0 {
             return Err(LiquidStakingError::ZeroAmount);
         }
 
-        env.storage()
-            .instance()
-            .set(
-                &LiquidStakingDataKey::ExchangeRate,
-                &ExchangeRate {
-                    rate: initial_exchange_rate,
-                },
-            );
+        env.storage().instance().set(
+            &LiquidStakingDataKey::ExchangeRate,
+            &ExchangeRate {
+                rate: initial_exchange_rate,
+            },
+        );
         env.storage()
             .instance()
             .set(&LiquidStakingDataKey::TotalLocked, &0u64);
@@ -134,11 +128,7 @@ impl LiquidStaking {
     /// lock.
     ///
     /// Emits [`Mint`] event.
-    pub fn mint(
-        env: Env,
-        sender: Address,
-        amount: u64,
-    ) -> Result<(), LiquidStakingError> {
+    pub fn mint(env: Env, sender: Address, amount: u64) -> Result<(), LiquidStakingError> {
         if amount == 0 {
             return Err(LiquidStakingError::ZeroAmount);
         }
@@ -192,9 +182,7 @@ impl LiquidStaking {
             .checked_add(amount)
             .ok_or(LiquidStakingError::MathOverflow)?;
         user_data.lock_start_ledger = env.ledger().sequence();
-        env.storage()
-            .persistent()
-            .set(&user_key, &user_data);
+        env.storage().persistent().set(&user_key, &user_data);
 
         Mint {
             caller: sender.clone(),
@@ -215,11 +203,7 @@ impl LiquidStaking {
     /// `current_ledger >= lock_start_ledger + LOCK_EPOCH_LEDGERS`.
     ///
     /// Emits [`Burn`] event.
-    pub fn burn(
-        env: Env,
-        sender: Address,
-        stacc_amount: u64,
-    ) -> Result<(), LiquidStakingError> {
+    pub fn burn(env: Env, sender: Address, stacc_amount: u64) -> Result<(), LiquidStakingError> {
         if stacc_amount == 0 {
             return Err(LiquidStakingError::ZeroAmount);
         }
@@ -247,8 +231,7 @@ impl LiquidStaking {
         // Calculate underlying tokens: stACC * exchange_rate / 1e6
         // Using u128 intermediate to avoid overflow
         let underlying_redeemed: u64 = {
-            let tmp: u128 =
-                (stacc_amount as u128).saturating_mul(exchange_rate.rate as u128);
+            let tmp: u128 = (stacc_amount as u128).saturating_mul(exchange_rate.rate as u128);
             let div: u128 = 1_000_000u128;
             (tmp / div) as u64
         };
@@ -267,9 +250,7 @@ impl LiquidStaking {
             .checked_sub(stacc_amount)
             .ok_or(LiquidStakingError::MathOverflow)?; // 1:1 burn of underlying that was locked
 
-        env.storage()
-            .persistent()
-            .set(&user_key, &user_data);
+        env.storage().persistent().set(&user_key, &user_data);
 
         // Update global totals
         let mut total_supply: u64 = env
@@ -316,14 +297,14 @@ impl LiquidStaking {
     /// Returns [`LiquidStakingError::NotInitialized`] if `initialize` has not
     /// been called yet, rather than a silent default rate.
     pub fn get_exchange_rate(env: Env) -> Result<u64, LiquidStakingError> {
-    let rate = env
-        .storage()
-        .instance()
-        .get(&LiquidStakingDataKey::ExchangeRate)
-        .map(|er: ExchangeRate| er.rate)
-        .unwrap_or(1_000_000);
-    Ok(rate)
-}
+        let rate = env
+            .storage()
+            .instance()
+            .get(&LiquidStakingDataKey::ExchangeRate)
+            .map(|er: ExchangeRate| er.rate)
+            .unwrap_or(1_000_000);
+        Ok(rate)
+    }
     /// Read-only: fetch total underlying tokens locked.
     pub fn get_total_locked(env: Env) -> u64 {
         env.storage()
@@ -356,10 +337,7 @@ impl LiquidStaking {
 
     /// Update the exchange rate. Bump to reflect accumulated yield.
     /// The new rate must be >= the current rate.
-    pub fn set_exchange_rate(
-        env: Env,
-        new_rate: u64,
-    ) -> Result<(), LiquidStakingError> {
+    pub fn set_exchange_rate(env: Env, new_rate: u64) -> Result<(), LiquidStakingError> {
         if new_rate == 0 {
             return Err(LiquidStakingError::ZeroAmount);
         }
@@ -367,12 +345,10 @@ impl LiquidStaking {
         if new_rate < current {
             return Err(LiquidStakingError::MathOverflow); // rate cannot go backwards
         }
-        env.storage()
-            .instance()
-            .set(
-                &LiquidStakingDataKey::ExchangeRate,
-                &ExchangeRate { rate: new_rate },
-            );
+        env.storage().instance().set(
+            &LiquidStakingDataKey::ExchangeRate,
+            &ExchangeRate { rate: new_rate },
+        );
         Ok(())
     }
 }
